@@ -49,5 +49,29 @@
 
   { "name": "codex: sed -i still reaches a Bash matcher", "cli": "codex",
     "event": "PreToolUse", "tool": "Bash",
-    "input": {"command":"sed -i 's/a/b/' src/main.py"}, "expect": "instruct" }
+    "input": {"command":"sed -i 's/a/b/' src/main.py"}, "expect": "instruct" },
+
+  { "name": "python heredoc rewrite, unguarded", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'EOF'\np='worker/index.ts'; s=open(p).read()\ns=s.replace('import { env }', 'import { env, runDuration }')\nopen(p,'w').write(s)\nEOF"}, "expect": "instruct" },
+  { "name": "python heredoc with pathlib", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'PY'\nimport pathlib\np = pathlib.Path('docs/architecture.md'); s = p.read_text()\ns = s.replace('old text', 'new text')\np.write_text(s)\nPY"}, "expect": "instruct" },
+  { "name": "python -c inline rewrite", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 -c \"p='CLAUDE.md'; s=open(p).read(); s=s.replace('a','b'); open(p,'w').write(s)\""}, "expect": "instruct" },
+  { "name": "python heredoc using re.sub", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'EOF'\nimport re\np='src/app.py'; s=open(p).read()\ns=re.sub(r'foo', 'bar', s)\nopen(p,'w').write(s)\nEOF"}, "expect": "instruct" },
+  { "name": "node -e rewrite", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"node -e \"const fs=require('fs'); let s=fs.readFileSync('app.js','utf8'); s=s.replace('a','b'); fs.writeFileSync('app.js',s)\""}, "expect": "instruct" },
+
+  { "name": "guarded with assert old in s", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'EOF'\np='worker/index.ts'; s=open(p).read()\nold='import { env }'\nassert old in s\ns=s.replace(old, 'import { env, runDuration }')\nopen(p,'w').write(s)\nEOF"}, "expect": "allow" },
+  { "name": "guarded with a count assertion", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'EOF'\np='a.ts'; s=open(p).read()\nold='x'\nassert s.count(old)==1\ns=s.replace(old,'y')\nopen(p,'w').write(s)\nEOF"}, "expect": "allow" },
+  { "name": "guarded with an if/not-in check", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'EOF'\np='a.ts'; s=open(p).read()\nif 'x' not in s: raise SystemExit('missing')\ns=s.replace('x','y')\nopen(p,'w').write(s)\nEOF"}, "expect": "allow" },
+  { "name": "heredoc that only reads", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'EOF'\nimport json\nd=json.load(open('definition.json'))\nprint(len(d))\nEOF"}, "expect": "allow" },
+  { "name": "heredoc generating a new file", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'EOF'\nopen('/tmp/out.sh','w').write('#!/bin/sh\\necho hi\\n')\nEOF"}, "expect": "allow" },
+  { "name": "heredoc rewriting a scratch file", "event": "PreToolUse", "tool": "Bash",
+    "input": {"command":"python3 - <<'EOF'\np='/tmp/scratch.txt'; s=open(p).read()\ns=s.replace('a','b')\nopen(p,'w').write(s)\nEOF"}, "expect": "allow" }
 ]

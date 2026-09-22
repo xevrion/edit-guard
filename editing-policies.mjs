@@ -107,6 +107,53 @@ const inPlaceTargets = (seg) => {
   return null;
 };
 
+/*
+ * The same failure in a different costume: a scripting runtime invoked inline
+ * to read a file, string-replace part of it, and write it back.
+ *
+ *   python3 - <<'EOF'
+ *   p='worker/index.ts'; s=open(p).read()
+ *   s=s.replace('import { env }', 'import { env, runDuration }')
+ *   open(p,'w').write(s)
+ *   EOF
+ *
+ * `str.replace` with no match returns the subject unchanged, so the file is
+ * rewritten byte-identical and the process exits 0. As with `sed -i`, a failed
+ * edit and a successful one are indistinguishable from the outside.
+ *
+ * Agents already know this. In the corpus behind this policy, 72% of these
+ * carried a hand-written guard — `assert old in s` 364 times, and
+ * `assert s.count(old)==1` another 362 — written precisely because `.replace`
+ * cannot be trusted to have done anything. That guard is the Edit tool's
+ * contract, reimplemented by hand on every call.
+ *
+ * So the policy stays quiet when the guard is there. Someone who has already
+ * asserted the match is not making the mistake, and nagging them is how a
+ * policy gets switched off.
+ */
+const INLINE_RUNTIME = /(?:^|[\s;&|(])(?:python3?|node|bun|ruby)\s+(?:-\s*<<|-c\s|-e\s|--eval\s)/;
+
+const READS_A_FILE = /\.read_text\(\)|open\([^)]*\)\.read\(\)|readFileSync\(|File\.read\(/;
+const REPLACES_TEXT = /\.replace\(|re\.sub\(|\.gsub[(!]/;
+const WRITES_BACK = /\.write_text\(|\.write\(|writeFileSync\(|File\.write\(/;
+
+// The shapes the agent writes when it does not trust the replace to land.
+const HAS_GUARD =
+  /\bassert\b|\bnot\s+in\b|\.count\([^)]*\)\s*[=!<>]|!=\s*(?:orig|before|old_s|src)\b|\braise\s+SystemExit|\bsys\.exit\(|\bprocess\.exit\(|\bthrow\s+new\b/;
+
+const inlineRewrite = (cmd) => {
+  if (!INLINE_RUNTIME.test(cmd)) return null;
+  if (!READS_A_FILE.test(cmd) || !REPLACES_TEXT.test(cmd) || !WRITES_BACK.test(cmd)) return null;
+  if (HAS_GUARD.test(cmd)) return null;
+
+  const m =
+    /\bp\s*=\s*['"]([^'"]+)['"]/.exec(cmd) ??
+    /Path\(\s*['"]([^'"]+)['"]/.exec(cmd) ??
+    /open\(\s*['"]([^'"]+)['"]/.exec(cmd) ??
+    /readFileSync\(\s*['"]([^'"]+)['"]/.exec(cmd);
+  return { file: m?.[1] ?? null };
+};
+
 customPolicies.add({
   name: "prefer-edit-over-sed",
   description: "Steer in-place shell edits of source files to the Edit tool",
@@ -145,6 +192,25 @@ customPolicies.add({
           `file, then Edit it with the exact text you expect to replace. If this really is a ` +
           `bulk codemod or a generated file, say which and go ahead.`
       );
+    }
+
+    // The heredoc form is checked against the whole command: its body spans
+    // the newlines that segmentsOf splits on.
+    const rewrite = inlineRewrite(raw);
+    if (rewrite) {
+      const target = rewrite.file;
+      if (!target || !isPlumbing(target.startsWith("/") ? target : cwd ? `${cwd}/${target}` : target)) {
+        return instruct(
+          `Use the Edit tool to change ${target ?? "this file"} instead of reading it, ` +
+            `string-replacing, and writing it back. \`.replace()\` returns the text unchanged ` +
+            `when it matches nothing, so the file gets rewritten byte-identical and the script ` +
+            `still exits 0. A failed edit is indistinguishable from a successful one, which is ` +
+            `why this pattern usually ends up carrying a hand-written \`assert old in s\`. Edit ` +
+            `does that check for you: it fails when the text is not found, and refuses rather ` +
+            `than guessing when it appears more than once. Read the file, then Edit it. If you ` +
+            `are generating a file rather than editing one, use Write.`
+        );
+      }
     }
 
     return allow();
